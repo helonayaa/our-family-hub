@@ -884,7 +884,7 @@
     };
 
     function isCloudReady() {
-      return SUPABASE_URL.startsWith('http') && SUPABASE_ANON_KEY !== 'TEMPEL_ANON_KEY_LO_DI_SINI' && SUPABASE_ANON_KEY.length > 10;
+      return SUPABASE_URL.startsWith('http') && SUPABASE_ANON_KEY !== 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZvdmRtdm5pbmZqYXdneG5zbmJhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTU3NzUxOTksImV4cCI6MjExMTM1MTE5OX0.JA7IN1GdT6vbsEFXKqu3UPfFVJTKGclFrlpAWf8lUt8' && SUPABASE_ANON_KEY.length > 10;
     }
 
     async function fetchAllFromCloud() {
