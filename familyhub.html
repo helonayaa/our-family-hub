@@ -74,6 +74,14 @@
       gap: 18px;
     }
 
+    .header-top-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
     h1 {
       margin: 0 0 6px;
       font-family: 'Fraunces', serif;
@@ -87,6 +95,16 @@
       margin: 0;
       font-size: 14px;
       font-weight: 500;
+      color: var(--ink-muted);
+    }
+
+    .sync-pill {
+      font-size: 11.5px;
+      font-weight: 700;
+      padding: 5px 11px;
+      border-radius: 999px;
+      background: var(--surface-soft);
+      border: 1px solid var(--border-soft);
       color: var(--ink-muted);
     }
 
@@ -355,7 +373,7 @@
       margin-bottom: 4px;
     }
 
-    input, select {
+    input {
       width: 100%;
       padding: 9px 12px;
       border-radius: 12px;
@@ -368,7 +386,7 @@
       outline: none;
     }
 
-    input:focus, select:focus {
+    input:focus {
       border-color: var(--accent-warm);
     }
 
@@ -487,24 +505,10 @@
     }
 
     /* Notes & Upcoming */
-    .note-form-stack {
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-    }
-
     .note-input-row {
       display: flex;
       gap: 8px;
       align-items: center;
-    }
-
-    .author-select-compact {
-      width: auto;
-      min-width: 118px;
-      font-size: 12px;
-      font-weight: 700;
-      padding: 8px 10px;
     }
 
     .btn-note {
@@ -540,12 +544,6 @@
       border: 1px solid var(--border-soft);
       font-size: 13px;
       font-weight: 600;
-    }
-
-    .note-body {
-      display: flex;
-      flex-direction: column;
-      gap: 5px;
     }
 
     .upcoming-item {
@@ -660,12 +658,6 @@
       .floating-tabs {
         border-radius: 20px;
       }
-      .note-input-row {
-        flex-wrap: wrap;
-      }
-      .author-select-compact {
-        width: 100%;
-      }
     }
   </style>
 </head>
@@ -673,9 +665,12 @@
   <div class="wrap">
     <!-- Top Header & Full-Width Floating Tabs -->
     <header class="top-card">
-      <div>
-        <h1>Our Family Hub</h1>
-        <p class="header-desc">Jadwal, catatan, dan cerita kecil keluarga kita ❤️</p>
+      <div class="header-top-row">
+        <div>
+          <h1>Our Family Hub</h1>
+          <p class="header-desc">Jadwal, catatan, dan cerita kecil keluarga kita ❤️</p>
+        </div>
+        <span class="sync-pill" id="syncStatus">Memuat data...</span>
       </div>
 
       <nav class="floating-tabs" id="tabsBar">
@@ -756,7 +751,7 @@
             <h2 class="card-title" id="notesTitle">Catatan untuk Keluarga</h2>
             <span class="card-meta" id="notesMeta">Keluarga</span>
           </div>
-          <form class="note-form-stack" id="notesForm">
+          <form id="notesForm">
             <div class="note-input-row">
               <input type="text" id="notesInput" placeholder="Tulis catatan penting untuk keluarga..." required />
               <button type="submit" class="btn-note">Simpan</button>
@@ -776,7 +771,7 @@
     </div>
 
     <footer class="tiny-footer">
-      Made with love for our little circle • Local browser storage
+      Made with love for our little circle • Shared Family Sync
     </footer>
   </div>
 
@@ -800,10 +795,22 @@
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script>
-    const STORAGE_KEYS = {
-      events: 'naya_fh_events_v4',
-      familyNotes: 'naya_fh_family_notes_v4',
-      personalNotes: 'naya_fh_personal_notes_v4'
+    // === KONFIGURASI SUPABASE ===
+    const SUPABASE_URL = 'https://vovdmvninfjawgxnsnba.supabase.co';
+    const SUPABASE_ANON_KEY = 'sb_publishable_Qtvlo_x_8XP60Gc3JzjjuQ__4Dc4-d9';
+    const TABLE_NAME = 'family_hub_store';
+
+    const sbHeaders = {
+      'apikey': SUPABASE_ANON_KEY,
+      'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+      'Content-Type': 'application/json',
+      'Prefer': 'return=representation'
+    };
+
+    const CACHE_KEYS = {
+      events: 'naya_fh_events_v5',
+      familyNotes: 'naya_fh_family_notes_v5',
+      personalNotes: 'naya_fh_personal_notes_v5'
     };
 
     const MEMBERS = ['Bapak', 'Ibu', 'Nadin', 'Reza', 'Akhtar'];
@@ -818,6 +825,7 @@
     let popupMapInstance = null;
     let popupMarkerInstance = null;
 
+    const syncStatusEl = document.getElementById('syncStatus');
     const tabsBar = document.getElementById('tabsBar');
     const calendarSection = document.getElementById('calendarSection');
     const todayJumpBtn = document.getElementById('todayJumpBtn');
@@ -856,6 +864,79 @@
 
     eventDateInput.value = selectedDate;
 
+    function loadJson(key, fallback) {
+      try {
+        const raw = localStorage.getItem(key);
+        return raw ? JSON.parse(raw) : fallback;
+      } catch (e) {
+        return fallback;
+      }
+    }
+
+    function saveJson(key, val) {
+      localStorage.setItem(key, JSON.stringify(val));
+    }
+
+    const memoryCache = {
+      events: loadJson(CACHE_KEYS.events, []),
+      familyNotes: loadJson(CACHE_KEYS.familyNotes, []),
+      personalNotes: loadJson(CACHE_KEYS.personalNotes, {})
+    };
+
+    function isCloudReady() {
+      return SUPABASE_URL.startsWith('http') && SUPABASE_ANON_KEY !== 'TEMPEL_ANON_KEY_LO_DI_SINI' && SUPABASE_ANON_KEY.length > 10;
+    }
+
+    async function fetchAllFromCloud() {
+      if (!isCloudReady()) {
+        syncStatusEl.textContent = 'Mode Lokal (Key belum diisi)';
+        return;
+      }
+      syncStatusEl.textContent = 'Menyinkronkan...';
+      try {
+        const res = await fetch(`${SUPABASE_URL}/rest/v1/${TABLE_NAME}?select=hub_key,payload`, {
+          headers: sbHeaders
+        });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const rows = await res.json();
+        rows.forEach((row) => {
+          if (row.hub_key === 'events' && Array.isArray(row.payload)) {
+            memoryCache.events = row.payload;
+            saveJson(CACHE_KEYS.events, row.payload);
+          } else if (row.hub_key === 'familyNotes' && Array.isArray(row.payload)) {
+            memoryCache.familyNotes = row.payload;
+            saveJson(CACHE_KEYS.familyNotes, row.payload);
+          } else if (row.hub_key === 'personalNotes' && typeof row.payload === 'object' && row.payload !== null) {
+            memoryCache.personalNotes = row.payload;
+            saveJson(CACHE_KEYS.personalNotes, row.payload);
+          }
+        });
+        syncStatusEl.textContent = 'Tersinkronisasi ✓';
+        renderAll();
+      } catch (err) {
+        console.warn('Sync error:', err);
+        syncStatusEl.textContent = 'Offline / Gagal sync';
+      }
+    }
+
+    async function syncKeyToCloud(hubKey, value) {
+      saveJson(CACHE_KEYS[hubKey], value);
+      if (!isCloudReady()) return;
+      syncStatusEl.textContent = 'Menyimpan...';
+      try {
+        const res = await fetch(`${SUPABASE_URL}/rest/v1/${TABLE_NAME}?hub_key=eq.${encodeURIComponent(hubKey)}`, {
+          method: 'PATCH',
+          headers: sbHeaders,
+          body: JSON.stringify({ payload: value })
+        });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        syncStatusEl.textContent = 'Tersinkronisasi ✓';
+      } catch (err) {
+        console.warn('Save sync error:', err);
+        syncStatusEl.textContent = 'Gagal kirim ke cloud';
+      }
+    }
+
     function toIsoDate(d) {
       const y = d.getFullYear();
       const m = String(d.getMonth() + 1).padStart(2, '0');
@@ -883,19 +964,6 @@
       return '';
     }
 
-    function loadJson(key, fallback) {
-      try {
-        const raw = localStorage.getItem(key);
-        return raw ? JSON.parse(raw) : fallback;
-      } catch (e) {
-        return fallback;
-      }
-    }
-
-    function saveJson(key, val) {
-      localStorage.setItem(key, JSON.stringify(val));
-    }
-
     function sanitizeUrl(url) {
       if (!url) return '';
       const trimmed = url.trim();
@@ -912,8 +980,7 @@
     }
 
     window.openLocationPopup = function(eventId) {
-      const events = loadJson(STORAGE_KEYS.events, []);
-      const ev = events.find((item) => item.id === eventId);
+      const ev = memoryCache.events.find((item) => item.id === eventId);
       if (!ev) return;
 
       const parsed = parseCoords(ev.coords);
@@ -973,9 +1040,8 @@
         year: 'numeric'
       });
 
-      const events = loadJson(STORAGE_KEYS.events, []);
       const dotsByDate = {};
-      events.forEach((ev) => {
+      memoryCache.events.forEach((ev) => {
         if (!dotsByDate[ev.date]) dotsByDate[ev.date] = new Set();
         dotsByDate[ev.date].add(ev.owner);
       });
@@ -1041,7 +1107,7 @@
     }
 
     function renderSchedules() {
-      const allEvents = loadJson(STORAGE_KEYS.events, []);
+      const allEvents = memoryCache.events;
       let items = [];
 
       if (activeTab === 'Home') {
@@ -1090,7 +1156,7 @@
     }
 
     function renderUpcoming() {
-      const allEvents = loadJson(STORAGE_KEYS.events, []);
+      const allEvents = memoryCache.events;
       const scoped = activeTab === 'Home'
         ? allEvents
         : allEvents.filter((ev) => ev.owner === activeTab);
@@ -1132,11 +1198,10 @@
     }
 
     window.deleteSchedule = function(id) {
-      const next = loadJson(STORAGE_KEYS.events, []).filter((ev) => ev.id !== id);
-      saveJson(STORAGE_KEYS.events, next);
-      renderCalendar();
-      renderSchedules();
-      renderUpcoming();
+      const next = memoryCache.events.filter((ev) => ev.id !== id);
+      memoryCache.events = next;
+      renderAll();
+      syncKeyToCloud('events', next);
     };
 
     scheduleForm.addEventListener('submit', (e) => {
@@ -1152,18 +1217,20 @@
 
       if (!title || !date) return;
 
-      const events = loadJson(STORAGE_KEYS.events, []);
-      events.unshift({
-        id: String(Date.now()),
-        owner: activeTab,
-        date,
-        time,
-        title,
-        location,
-        coords,
-        mapsUrl
-      });
-      saveJson(STORAGE_KEYS.events, events);
+      const next = [
+        {
+          id: String(Date.now()),
+          owner: activeTab,
+          date,
+          time,
+          title,
+          location,
+          coords,
+          mapsUrl
+        },
+        ...memoryCache.events
+      ];
+      memoryCache.events = next;
 
       eventTitleInput.value = '';
       eventTimeInput.value = '';
@@ -1176,39 +1243,43 @@
       viewYear = yy;
       viewMonth = mm - 1;
 
-      renderCalendar();
-      renderSchedules();
-      renderUpcoming();
+      renderAll();
+      syncKeyToCloud('events', next);
     });
 
     function getActiveNotesArray() {
       if (activeTab === 'Home') {
-        return loadJson(STORAGE_KEYS.familyNotes, []);
+        return memoryCache.familyNotes;
       }
-      const allPersonal = loadJson(STORAGE_KEYS.personalNotes, {});
-      return allPersonal[activeTab] || [];
+      return memoryCache.personalNotes[activeTab] || [];
     }
 
     function saveActiveNotesArray(nextArr) {
       if (activeTab === 'Home') {
-        saveJson(STORAGE_KEYS.familyNotes, nextArr);
+        memoryCache.familyNotes = nextArr;
+        renderNotes();
+        syncKeyToCloud('familyNotes', nextArr);
         return;
       }
-      const allPersonal = loadJson(STORAGE_KEYS.personalNotes, {});
-      allPersonal[activeTab] = nextArr;
-      saveJson(STORAGE_KEYS.personalNotes, allPersonal);
+      const updatedPersonal = {
+        ...memoryCache.personalNotes,
+        [activeTab]: nextArr
+      };
+      memoryCache.personalNotes = updatedPersonal;
+      renderNotes();
+      syncKeyToCloud('personalNotes', updatedPersonal);
     }
 
     function renderNotes() {
-	  if (activeTab === 'Home') {
-		notesTitle.textContent = 'Catatan untuk Keluarga';
-		notesMeta.textContent = 'Keluarga';
-		notesInput.placeholder = 'Tulis catatan penting untuk keluarga...';
-	  } else {
-		notesTitle.textContent = `Catatan ${activeTab}`;
-		notesMeta.textContent = 'Reminder pribadi';
-		notesInput.placeholder = `Tulis catatan atau reminder untuk ${activeTab}...`;
-	  }
+      if (activeTab === 'Home') {
+        notesTitle.textContent = 'Catatan untuk Keluarga';
+        notesMeta.textContent = 'Keluarga';
+        notesInput.placeholder = 'Tulis catatan penting untuk keluarga...';
+      } else {
+        notesTitle.textContent = `Catatan ${activeTab}`;
+        notesMeta.textContent = 'Reminder pribadi';
+        notesInput.placeholder = `Tulis catatan atau reminder untuk ${activeTab}...`;
+      }
 
       const items = getActiveNotesArray();
       if (items.length === 0) {
@@ -1216,38 +1287,27 @@
         return;
       }
 
-      notesList.innerHTML = items.map((n) => {
-        const authorChip = (activeTab === 'Home' && n.author)
-          ? `<span class="owner-badge badge-${n.author}" style="width:fit-content;"><span class="dot dot-${n.author}"></span>${n.author}</span>`
-          : '';
-
-        return `
-          <li class="note-item">
-            <div class="note-body">
-              <span>${n.text}</span>
-            </div>
-            <button type="button" class="btn-del" onclick="deleteNote('${n.id}')">✕</button>
-          </li>
-        `;
-      }).join('');
+      notesList.innerHTML = items.map((n) => `
+        <li class="note-item">
+          <span>${n.text}</span>
+          <button type="button" class="btn-del" onclick="deleteNote('${n.id}')">✕</button>
+        </li>
+      `).join('');
     }
 
     window.deleteNote = function(id) {
       const next = getActiveNotesArray().filter((n) => n.id !== id);
       saveActiveNotesArray(next);
-      renderNotes();
     };
 
     notesForm.addEventListener('submit', (e) => {
-	  e.preventDefault();
-	  const text = notesInput.value.trim();
-	  if (!text) return;
-	  const items = getActiveNotesArray();
-	  items.unshift({ id: String(Date.now()), text });
-	  saveActiveNotesArray(items);
-	  notesInput.value = '';
-	  renderNotes();
-	});
+      e.preventDefault();
+      const text = notesInput.value.trim();
+      if (!text) return;
+      const items = [{ id: String(Date.now()), text }, ...getActiveNotesArray()];
+      notesInput.value = '';
+      saveActiveNotesArray(items);
+    });
 
     todayJumpBtn.addEventListener('click', () => {
       selectedDate = todayIso;
@@ -1266,10 +1326,7 @@
       btn.classList.add('active');
       activeTab = btn.dataset.tab;
 
-      renderCalendar();
-      renderSchedules();
-      renderNotes();
-      renderUpcoming();
+      renderAll();
     });
 
     prevMonthBtn.addEventListener('click', () => {
@@ -1290,10 +1347,15 @@
       renderCalendar();
     });
 
-    renderCalendar();
-    renderSchedules();
-    renderNotes();
-    renderUpcoming();
+    function renderAll() {
+      renderCalendar();
+      renderSchedules();
+      renderNotes();
+      renderUpcoming();
+    }
+
+    renderAll();
+    fetchAllFromCloud();
   </script>
 </body>
 </html>
